@@ -1,0 +1,6 @@
+# Secrets
+.env
+
+# Your TLS certificate and key — never commit them
+certs/cert.pem
+certs/cert.key

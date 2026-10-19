@@ -1,0 +1,613 @@
+# Eviworx — Docker Compose
+#
+# All secrets are read from .env (auto-loaded by Docker Compose).
+# Copy .env.example to .env and fill in your values.
+#
+# Usage:
+#   docker compose pull
+#   docker compose up -d
+
+services:
+  traefik:
+    image: traefik:v3.7.13
+    container_name: eviworx-traefik
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./certs/cert.pem:/etc/traefik/ssl/cert.pem:ro
+      - ./certs/cert.key:/etc/traefik/ssl/cert.key:ro
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping.entrypoint=ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '1.0'
+        reservations:
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    image: registry.eviworx.com/eviworx/frontend:beta-20261009-77e8e49c
+    container_name: eviworx-frontend
+    environment:
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+    expose:
+      - "80"
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=64M
+      - /var/run:size=1M
+      - /tmp:size=16M
+    volumes:
+      # Frontend copies its source maps here; the backend reads them read-only
+      - sourcemaps:/opt/sourcemaps:rw
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_ADMIN
+      - MKNOD
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 32M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    image: registry.eviworx.com/eviworx/backend:beta-20261009-77e8e49c
+    container_name: eviworx-backend
+    ports:
+      - "3000:3000"
+    expose:
+      - "3000"
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-helpdesk_user}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
+      - JWT_SECRET_OLD=${JWT_SECRET_OLD:-}
+      - SHARE_SECRET=${SHARE_SECRET:?set SHARE_SECRET in .env}
+      - SHARE_SECRET_OLD=${SHARE_SECRET_OLD:-}
+      - FRONTEND_URL=${FRONTEND_URL:?set FRONTEND_URL in .env}
+      - NODE_ENV=production
+      - SEED_DATABASE=${SEED_DATABASE:-true}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?set ADMIN_INITIAL_PASSWORD in .env}
+      - SESSION_MAX_HOURS=${SESSION_MAX_HOURS:-12}
+      - ACCESS_TOKEN_EXPIRY_MINUTES=${ACCESS_TOKEN_EXPIRY_MINUTES:-60}
+      - REFRESH_TOKEN_EXPIRY_MINUTES=${REFRESH_TOKEN_EXPIRY_MINUTES:-100}
+      - IDLE_TIMEOUT_MINUTES=${IDLE_TIMEOUT_MINUTES:-30}
+      # Rate limits (NAT-safe) — override in .env, applied on backend restart
+      - GLOBAL_RATE_LIMIT_MAX=${GLOBAL_RATE_LIMIT_MAX:-2000}
+      - AUTH_FAIL_PER_PAIR_MAX=${AUTH_FAIL_PER_PAIR_MAX:-5}
+      - AUTH_FAIL_PER_IP_MAX=${AUTH_FAIL_PER_IP_MAX:-30}
+      - REFRESH_FAIL_PER_IP_MAX=${REFRESH_FAIL_PER_IP_MAX:-60}
+      - LOGOUT_PER_IP_MAX=${LOGOUT_PER_IP_MAX:-120}
+      - TWOFA_FAIL_PER_IP_MAX=${TWOFA_FAIL_PER_IP_MAX:-20}
+      - FORGOT_PW_PER_IP_MAX=${FORGOT_PW_PER_IP_MAX:-20}
+      - RESET_PW_PER_IP_MAX=${RESET_PW_PER_IP_MAX:-20}
+      - OAUTH_CB_PER_IP_MAX=${OAUTH_CB_PER_IP_MAX:-30}
+      - INVITE_LOOKUP_PER_IP_MAX=${INVITE_LOOKUP_PER_IP_MAX:-30}
+      - PASSWORD_CHANGE_MAX=${PASSWORD_CHANGE_MAX:-10}
+      - CRITICAL_OPS_RATE_LIMIT_MAX=${CRITICAL_OPS_RATE_LIMIT_MAX:-60}
+      - UPLOAD_DIR=/app/uploads
+      - QUARANTINE_DIR=/app/quarantine
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-104857600}
+      - FILE_UPLOAD_RATE_LIMIT=${FILE_UPLOAD_RATE_LIMIT:-200}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-mailto:admin@helpdesk.local}
+      - LICENSE_ENCRYPTION_KEY=${LICENSE_ENCRYPTION_KEY:?set LICENSE_ENCRYPTION_KEY in .env}
+      - TWO_FACTOR_ENCRYPTION_KEY=${TWO_FACTOR_ENCRYPTION_KEY:?set TWO_FACTOR_ENCRYPTION_KEY in .env}
+      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
+      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
+      - ENABLE_FIPS=${ENABLE_FIPS:-false}
+      - PBKDF2_ITERATIONS=${PBKDF2_ITERATIONS:-210000}
+      - UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-16}
+      - LICENSE_KEY=${LICENSE_KEY:-}
+      - LICENSE_SECRET=${LICENSE_SECRET:-}
+      - LICENSE_SERVER_URL=${LICENSE_SERVER_URL:-https://lic.eviworx.com}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      # Webhook targets allowed in internal networks (IP/CIDR/hostname, no ports)
+      - SSRF_ALLOWLIST=${SSRF_ALLOWLIST:-}
+      - SSRF_ALLOWED_PORTS=${SSRF_ALLOWED_PORTS:-}
+    volumes:
+      - uploads:/app/uploads
+      - quarantine:/app/quarantine
+      # Source maps from the frontend container, read-only
+      - sourcemaps:/opt/sourcemaps:ro
+    depends_on:
+      - db
+      - redis
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_ADMIN
+      - MKNOD
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: registry.eviworx.com/eviworx/db:beta-20261009-77e8e49c
+    container_name: eviworx-db
+    # PostgreSQL server parameters and a 256 MB /dev/shm for parallel queries
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=250ms
+    shm_size: 256mb
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-helpdesk_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=${POSTGRES_DB:-helpdesk_db}
+      - JOBWORKER_DB_PASSWORD=${JOBWORKER_DB_PASSWORD:?set JOBWORKER_DB_PASSWORD in .env}
+      - READONLY_DB_PASSWORD=${READONLY_DB_PASSWORD:?set READONLY_DB_PASSWORD in .env}
+    expose:
+      - "5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:8.8.3-alpine
+    container_name: eviworx-redis
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  email-worker:
+    image: registry.eviworx.com/eviworx/email-worker:beta-20261009-77e8e49c
+    container_name: eviworx-email-worker
+    environment:
+      - TZ=UTC
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - NODE_ENV=production
+      - HEALTH_PORT=3005
+      - EMAIL_ACCENT_COLOR=${EMAIL_ACCENT_COLOR:-#3b8f93}
+      - EMAIL_APP_NAME=${EMAIL_APP_NAME:-Eviworx}
+      - EMAIL_APP_URL=${EMAIL_APP_URL:-}
+      - EMAIL_FOOTER_TEXT=${EMAIL_FOOTER_TEXT:-Eviworx}
+      - EMAIL_LAYOUT_ENABLED=${EMAIL_LAYOUT_ENABLED:-true}
+      - FRONTEND_URL=${FRONTEND_URL:?set FRONTEND_URL in .env}
+    expose:
+      - "3005"
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  job-worker:
+    image: registry.eviworx.com/eviworx/job-worker:beta-20261009-77e8e49c
+    container_name: eviworx-job-worker
+    expose:
+      - "3001"
+    environment:
+      - TZ=UTC
+      - DATABASE_URL=postgresql://helpdesk_jobworker:${JOBWORKER_DB_PASSWORD:?set JOBWORKER_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - NODE_ENV=production
+      - METRICS_PORT=3001
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  workflow-engine:
+    image: registry.eviworx.com/eviworx/workflow-engine:beta-20261009-77e8e49c
+    container_name: eviworx-workflow-engine
+    expose:
+      - "3003"
+    environment:
+      - TZ=UTC
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - NODE_ENV=production
+      - PORT=3003
+      - LOG_LEVEL=info
+      - RECOVERY_STUCK_THRESHOLD_MINUTES=10
+      - CIRCUIT_BREAKER_THRESHOLD=5
+      - CIRCUIT_BREAKER_RESET_MS=30000
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3003/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  notification-worker:
+    image: registry.eviworx.com/eviworx/notification-worker:beta-20261009-77e8e49c
+    container_name: eviworx-notification-worker
+    environment:
+      - TZ=UTC
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - HEALTH_PORT=3006
+    expose:
+      - "3006"
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  clamav:
+    image: clamav/clamav:1.5.4
+    container_name: eviworx-clamav
+    environment:
+      - FRESHCLAM_DAEMON=yes
+      - CLAMD_DAEMON=yes
+      - FRESHCLAM_CHECKS=24
+    volumes:
+      - clamav_data:/var/lib/clamav
+      - uploads:/app/uploads:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_ADMIN
+      - MKNOD
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  av-worker:
+    image: registry.eviworx.com/eviworx/av-worker:beta-20261009-77e8e49c
+    container_name: eviworx-av-worker
+    environment:
+      - TZ=UTC
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
+      - SCAN_POLL_CRON=*/10 * * * * *
+      - SCAN_BATCH_SIZE=5
+      - SCAN_TIMEOUT_MS=120000
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=256
+      - HEALTH_PORT=3007
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+    expose:
+      - "3007"
+    depends_on:
+      clamav:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /app/tmp:size=64M,mode=1777
+      - /tmp:size=64M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  report-generator:
+    image: registry.eviworx.com/eviworx/report-generator:beta-20261009-77e8e49c
+    container_name: eviworx-report-generator
+    expose:
+      - "3004"
+    environment:
+      - TZ=UTC
+      - DATABASE_URL=postgresql://helpdesk_readonly:${READONLY_DB_PASSWORD:?set READONLY_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      - BACKEND_URL=http://backend:3000
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      - NODE_ENV=production
+      - PORT=3004
+      - COMPANY_NAME=${COMPANY_NAME:-Eviworx Software UG}
+      - CSV_DELIMITER=${CSV_DELIMITER:-;}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3004/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads:
+  quarantine:
+  clamav_data:
+  sourcemaps:  # frontend source maps (written by frontend, read by backend)

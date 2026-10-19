@@ -1,0 +1,112 @@
+# Traefik v3 — Dynamic Configuration
+# Routing, Services, Middlewares, TLS
+
+http:
+  middlewares:
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "geolocation=(self), microphone=(), camera=(self)"
+        customResponseHeaders:
+          X-Frame-Options: "SAMEORIGIN"
+        contentSecurityPolicy: >-
+          default-src 'self';
+          script-src 'self' https://challenges.cloudflare.com;
+          style-src 'self' 'unsafe-inline';
+          img-src 'self' data: blob: https:;
+          font-src 'self' data:;
+          connect-src 'self' https://challenges.cloudflare.com;
+          frame-src 'self' https://challenges.cloudflare.com;
+          frame-ancestors 'self';
+          base-uri 'self';
+          form-action 'self';
+
+    compress-middleware:
+      compress: {}
+
+    # SECURITY: Rate-Limiting auf Traefik-Ebene (DDoS-Schutz vor dem Backend)
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+
+  routers:
+    # SECURITY: Block /api/internal from external access (higher priority than backend-api)
+    block-internal-api:
+      rule: "PathPrefix(`/api/internal`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      priority: 40
+      service: noop@internal
+      middlewares:
+        - security-headers
+
+    backend-api:
+      rule: "PathPrefix(`/api`)"
+      service: backend-service
+      entryPoints:
+        - websecure
+      tls: {}
+      priority: 30
+      middlewares:
+        - security-headers
+        - compress-middleware
+        - rate-limit
+
+    backend-ws:
+      rule: "PathPrefix(`/socket.io`)"
+      service: backend-service
+      entryPoints:
+        - websecure
+      tls: {}
+      priority: 20
+      middlewares:
+        - security-headers
+
+    frontend-spa:
+      rule: "PathPrefix(`/`)"
+      service: frontend-service
+      entryPoints:
+        - websecure
+      tls: {}
+      priority: 10
+      middlewares:
+        - security-headers
+        - compress-middleware
+        - rate-limit
+
+  services:
+    backend-service:
+      loadBalancer:
+        servers:
+          - url: "http://backend:3000"
+
+    frontend-service:
+      loadBalancer:
+        servers:
+          - url: "http://frontend:80"
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/ssl/cert.pem
+        keyFile: /etc/traefik/ssl/cert.key

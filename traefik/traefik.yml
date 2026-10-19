@@ -1,0 +1,58 @@
+# Traefik v3 — Static Configuration
+# Reverse Proxy + TLS Termination + Routing
+
+api:
+  dashboard: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+    # Trust X-Forwarded-For from these IPs (don't overwrite the header)
+    # Add your external reverse proxy / load balancer CIDR here
+    forwardedHeaders:
+      trustedIPs:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+    forwardedHeaders:
+      trustedIPs:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+  # Internal-only entrypoint for healthcheck (not exposed to host)
+  ping:
+    address: ":8082"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+accessLog:
+  format: json
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        X-Request-ID: keep
+        User-Agent: keep
+
+log:
+  level: INFO
+  format: json
+
+ping:
+  entryPoint: ping
+
+tracing:
+  serviceName: "traefik"
+  sampleRate: 1.0
