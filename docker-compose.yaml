@@ -7,6 +7,21 @@
 #   docker compose pull
 #   docker compose up -d
 
+# Outbound proxy — shared by every Node service (backend and all workers).
+# Without HTTP_PROXY/HTTPS_PROXY in .env every call goes direct, exactly as before.
+# NODE_USE_ENV_PROXY makes Node route fetch AND http(s).request (Entra/msal, Web Push)
+# through the proxy. NO_PROXY: the service names below are fixed — internal traffic
+# never goes to the proxy; NO_PROXY from .env is only APPENDED (host names and
+# .domain suffixes; Node does not evaluate CIDR ranges). Corporate CA for TLS
+# inspection: put the PEM into ./certs/proxy/ and set
+# NODE_EXTRA_CA_CERTS=/etc/eviworx/proxy-ca/<file>.pem.
+x-proxy-env: &proxy-env
+  NODE_USE_ENV_PROXY: '1'
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  NO_PROXY: localhost,127.0.0.1,::1,traefik,frontend,backend,db,redis,email-worker,job-worker,workflow-engine,notification-worker,clamav,av-worker,report-generator,mail-sink,${NO_PROXY:-}
+  NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-}
+
 services:
   traefik:
     image: traefik:v3.7.13
@@ -99,61 +114,65 @@ services:
       - "3000"
     restart: unless-stopped
     environment:
-      - TZ=UTC
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-helpdesk_user}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
-      - JWT_SECRET=${JWT_SECRET:?set JWT_SECRET in .env}
-      - JWT_SECRET_OLD=${JWT_SECRET_OLD:-}
-      - SHARE_SECRET=${SHARE_SECRET:?set SHARE_SECRET in .env}
-      - SHARE_SECRET_OLD=${SHARE_SECRET_OLD:-}
-      - FRONTEND_URL=${FRONTEND_URL:?set FRONTEND_URL in .env}
-      - NODE_ENV=production
-      - SEED_DATABASE=${SEED_DATABASE:-true}
-      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?set ADMIN_INITIAL_PASSWORD in .env}
-      - SESSION_MAX_HOURS=${SESSION_MAX_HOURS:-12}
-      - ACCESS_TOKEN_EXPIRY_MINUTES=${ACCESS_TOKEN_EXPIRY_MINUTES:-60}
-      - REFRESH_TOKEN_EXPIRY_MINUTES=${REFRESH_TOKEN_EXPIRY_MINUTES:-100}
-      - IDLE_TIMEOUT_MINUTES=${IDLE_TIMEOUT_MINUTES:-30}
+      <<: *proxy-env
+      TZ: UTC
+      DATABASE_URL: postgresql://${POSTGRES_USER:-helpdesk_user}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      JWT_SECRET_OLD: ${JWT_SECRET_OLD:-}
+      SHARE_SECRET: ${SHARE_SECRET:?set SHARE_SECRET in .env}
+      SHARE_SECRET_OLD: ${SHARE_SECRET_OLD:-}
+      FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL in .env}
+      NODE_ENV: production
+      SEED_DATABASE: ${SEED_DATABASE:-true}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:?set ADMIN_INITIAL_PASSWORD in .env}
+      SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-12}
+      ACCESS_TOKEN_EXPIRY_MINUTES: ${ACCESS_TOKEN_EXPIRY_MINUTES:-60}
+      REFRESH_TOKEN_EXPIRY_MINUTES: ${REFRESH_TOKEN_EXPIRY_MINUTES:-100}
+      IDLE_TIMEOUT_MINUTES: ${IDLE_TIMEOUT_MINUTES:-30}
       # Rate limits (NAT-safe) — override in .env, applied on backend restart
-      - GLOBAL_RATE_LIMIT_MAX=${GLOBAL_RATE_LIMIT_MAX:-2000}
-      - AUTH_FAIL_PER_PAIR_MAX=${AUTH_FAIL_PER_PAIR_MAX:-5}
-      - AUTH_FAIL_PER_IP_MAX=${AUTH_FAIL_PER_IP_MAX:-30}
-      - REFRESH_FAIL_PER_IP_MAX=${REFRESH_FAIL_PER_IP_MAX:-60}
-      - LOGOUT_PER_IP_MAX=${LOGOUT_PER_IP_MAX:-120}
-      - TWOFA_FAIL_PER_IP_MAX=${TWOFA_FAIL_PER_IP_MAX:-20}
-      - FORGOT_PW_PER_IP_MAX=${FORGOT_PW_PER_IP_MAX:-20}
-      - RESET_PW_PER_IP_MAX=${RESET_PW_PER_IP_MAX:-20}
-      - OAUTH_CB_PER_IP_MAX=${OAUTH_CB_PER_IP_MAX:-30}
-      - INVITE_LOOKUP_PER_IP_MAX=${INVITE_LOOKUP_PER_IP_MAX:-30}
-      - PASSWORD_CHANGE_MAX=${PASSWORD_CHANGE_MAX:-10}
-      - CRITICAL_OPS_RATE_LIMIT_MAX=${CRITICAL_OPS_RATE_LIMIT_MAX:-60}
-      - UPLOAD_DIR=/app/uploads
-      - QUARANTINE_DIR=/app/quarantine
-      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-104857600}
-      - FILE_UPLOAD_RATE_LIMIT=${FILE_UPLOAD_RATE_LIMIT:-200}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
-      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
-      - VAPID_SUBJECT=${VAPID_SUBJECT:-mailto:admin@helpdesk.local}
-      - LICENSE_ENCRYPTION_KEY=${LICENSE_ENCRYPTION_KEY:?set LICENSE_ENCRYPTION_KEY in .env}
-      - TWO_FACTOR_ENCRYPTION_KEY=${TWO_FACTOR_ENCRYPTION_KEY:?set TWO_FACTOR_ENCRYPTION_KEY in .env}
-      - TURNSTILE_SITE_KEY=${TURNSTILE_SITE_KEY:-}
-      - TURNSTILE_SECRET_KEY=${TURNSTILE_SECRET_KEY:-}
-      - ENABLE_FIPS=${ENABLE_FIPS:-false}
-      - PBKDF2_ITERATIONS=${PBKDF2_ITERATIONS:-210000}
-      - UV_THREADPOOL_SIZE=${UV_THREADPOOL_SIZE:-16}
-      - LICENSE_KEY=${LICENSE_KEY:-}
-      - LICENSE_SECRET=${LICENSE_SECRET:-}
-      - LICENSE_SERVER_URL=${LICENSE_SERVER_URL:-https://lic.eviworx.com}
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      GLOBAL_RATE_LIMIT_MAX: ${GLOBAL_RATE_LIMIT_MAX:-2000}
+      AUTH_FAIL_PER_PAIR_MAX: ${AUTH_FAIL_PER_PAIR_MAX:-5}
+      AUTH_FAIL_PER_IP_MAX: ${AUTH_FAIL_PER_IP_MAX:-30}
+      REFRESH_FAIL_PER_IP_MAX: ${REFRESH_FAIL_PER_IP_MAX:-60}
+      LOGOUT_PER_IP_MAX: ${LOGOUT_PER_IP_MAX:-120}
+      TWOFA_FAIL_PER_IP_MAX: ${TWOFA_FAIL_PER_IP_MAX:-20}
+      FORGOT_PW_PER_IP_MAX: ${FORGOT_PW_PER_IP_MAX:-20}
+      RESET_PW_PER_IP_MAX: ${RESET_PW_PER_IP_MAX:-20}
+      OAUTH_CB_PER_IP_MAX: ${OAUTH_CB_PER_IP_MAX:-30}
+      INVITE_LOOKUP_PER_IP_MAX: ${INVITE_LOOKUP_PER_IP_MAX:-30}
+      PASSWORD_CHANGE_MAX: ${PASSWORD_CHANGE_MAX:-10}
+      CRITICAL_OPS_RATE_LIMIT_MAX: ${CRITICAL_OPS_RATE_LIMIT_MAX:-60}
+      UPLOAD_DIR: /app/uploads
+      QUARANTINE_DIR: /app/quarantine
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-104857600}
+      FILE_UPLOAD_RATE_LIMIT: ${FILE_UPLOAD_RATE_LIMIT:-200}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@helpdesk.local}
+      LICENSE_ENCRYPTION_KEY: ${LICENSE_ENCRYPTION_KEY:?set LICENSE_ENCRYPTION_KEY in .env}
+      TWO_FACTOR_ENCRYPTION_KEY: ${TWO_FACTOR_ENCRYPTION_KEY:?set TWO_FACTOR_ENCRYPTION_KEY in .env}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      ENABLE_FIPS: ${ENABLE_FIPS:-false}
+      PBKDF2_ITERATIONS: ${PBKDF2_ITERATIONS:-210000}
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-16}
+      LICENSE_SERVER_URL: ${LICENSE_SERVER_URL:-https://lic.eviworx.com}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
       # Webhook targets allowed in internal networks (IP/CIDR/hostname, no ports)
-      - SSRF_ALLOWLIST=${SSRF_ALLOWLIST:-}
-      - SSRF_ALLOWED_PORTS=${SSRF_ALLOWED_PORTS:-}
+      SSRF_ALLOWLIST: ${SSRF_ALLOWLIST:-}
+      SSRF_ALLOWED_PORTS: ${SSRF_ALLOWED_PORTS:-}
+      # Behind an egress proxy without external DNS in the container: names the
+      # container cannot resolve are allowed and resolved by the proxy (its ACL is
+      # then the boundary). Default off — unresolvable names are blocked.
+      SSRF_PROXY_RESOLVES_DNS: ${SSRF_PROXY_RESOLVES_DNS:-false}
     volumes:
       - uploads:/app/uploads
       - quarantine:/app/quarantine
       # Source maps from the frontend container, read-only
       - sourcemaps:/opt/sourcemaps:ro
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     depends_on:
       - db
       - redis
@@ -275,21 +294,24 @@ services:
     image: registry.eviworx.com/eviworx/email-worker:beta-20261009-77e8e49c
     container_name: eviworx-email-worker
     environment:
-      - TZ=UTC
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - NODE_ENV=production
-      - HEALTH_PORT=3005
-      - EMAIL_ACCENT_COLOR=${EMAIL_ACCENT_COLOR:-#3b8f93}
-      - EMAIL_APP_NAME=${EMAIL_APP_NAME:-Eviworx}
-      - EMAIL_APP_URL=${EMAIL_APP_URL:-}
-      - EMAIL_FOOTER_TEXT=${EMAIL_FOOTER_TEXT:-Eviworx}
-      - EMAIL_LAYOUT_ENABLED=${EMAIL_LAYOUT_ENABLED:-true}
-      - FRONTEND_URL=${FRONTEND_URL:?set FRONTEND_URL in .env}
+      <<: *proxy-env
+      TZ: UTC
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      NODE_ENV: production
+      HEALTH_PORT: 3005
+      EMAIL_ACCENT_COLOR: ${EMAIL_ACCENT_COLOR:-#3b8f93}
+      EMAIL_APP_NAME: ${EMAIL_APP_NAME:-Eviworx}
+      EMAIL_APP_URL: ${EMAIL_APP_URL:-}
+      EMAIL_FOOTER_TEXT: ${EMAIL_FOOTER_TEXT:-Eviworx}
+      EMAIL_LAYOUT_ENABLED: ${EMAIL_LAYOUT_ENABLED:-true}
+      FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL in .env}
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     expose:
       - "3005"
     depends_on:
@@ -330,13 +352,16 @@ services:
     expose:
       - "3001"
     environment:
-      - TZ=UTC
-      - DATABASE_URL=postgresql://helpdesk_jobworker:${JOBWORKER_DB_PASSWORD:?set JOBWORKER_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - NODE_ENV=production
-      - METRICS_PORT=3001
+      <<: *proxy-env
+      TZ: UTC
+      DATABASE_URL: postgresql://helpdesk_jobworker:${JOBWORKER_DB_PASSWORD:?set JOBWORKER_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      NODE_ENV: production
+      METRICS_PORT: 3001
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     depends_on:
       db:
         condition: service_healthy
@@ -377,19 +402,22 @@ services:
     expose:
       - "3003"
     environment:
-      - TZ=UTC
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - NODE_ENV=production
-      - PORT=3003
-      - LOG_LEVEL=info
-      - RECOVERY_STUCK_THRESHOLD_MINUTES=10
-      - CIRCUIT_BREAKER_THRESHOLD=5
-      - CIRCUIT_BREAKER_RESET_MS=30000
+      <<: *proxy-env
+      TZ: UTC
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      NODE_ENV: production
+      PORT: 3003
+      LOG_LEVEL: info
+      RECOVERY_STUCK_THRESHOLD_MINUTES: 10
+      CIRCUIT_BREAKER_THRESHOLD: 5
+      CIRCUIT_BREAKER_RESET_MS: 30000
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -426,14 +454,17 @@ services:
     image: registry.eviworx.com/eviworx/notification-worker:beta-20261009-77e8e49c
     container_name: eviworx-notification-worker
     environment:
-      - TZ=UTC
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - NODE_ENV=production
-      - LOG_LEVEL=info
-      - HEALTH_PORT=3006
+      <<: *proxy-env
+      TZ: UTC
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      NODE_ENV: production
+      LOG_LEVEL: info
+      HEALTH_PORT: 3006
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     expose:
       - "3006"
     depends_on:
@@ -475,6 +506,10 @@ services:
       - FRESHCLAM_DAEMON=yes
       - CLAMD_DAEMON=yes
       - FRESHCLAM_CHECKS=24
+      # Signature updates (freshclam/libcurl): CLAMAV_HTTPS_PROXY unset → global
+      # HTTPS_PROXY; CLAMAV_HTTPS_PROXY= (empty) → direct; own value → own proxy.
+      - HTTPS_PROXY=${CLAMAV_HTTPS_PROXY-${HTTPS_PROXY:-}}
+      - NO_PROXY=${CLAMAV_NO_PROXY:-}
     volumes:
       - clamav_data:/var/lib/clamav
       - uploads:/app/uploads:ro
@@ -508,18 +543,21 @@ services:
     image: registry.eviworx.com/eviworx/av-worker:beta-20261009-77e8e49c
     container_name: eviworx-av-worker
     environment:
-      - TZ=UTC
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - CLAMAV_HOST=clamav
-      - CLAMAV_PORT=3310
-      - SCAN_POLL_CRON=*/10 * * * * *
-      - SCAN_BATCH_SIZE=5
-      - SCAN_TIMEOUT_MS=120000
-      - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=256
-      - HEALTH_PORT=3007
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      <<: *proxy-env
+      TZ: UTC
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: 3310
+      SCAN_POLL_CRON: '*/10 * * * * *'
+      SCAN_BATCH_SIZE: 5
+      SCAN_TIMEOUT_MS: 120000
+      NODE_ENV: production
+      NODE_OPTIONS: '--max-old-space-size=256'
+      HEALTH_PORT: 3007
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     expose:
       - "3007"
     depends_on:
@@ -561,15 +599,18 @@ services:
     expose:
       - "3004"
     environment:
-      - TZ=UTC
-      - DATABASE_URL=postgresql://helpdesk_readonly:${READONLY_DB_PASSWORD:?set READONLY_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - BACKEND_URL=http://backend:3000
-      - INTERNAL_API_KEY=${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
-      - NODE_ENV=production
-      - PORT=3004
-      - COMPANY_NAME=${COMPANY_NAME:-Eviworx Software UG}
-      - CSV_DELIMITER=${CSV_DELIMITER:-;}
+      <<: *proxy-env
+      TZ: UTC
+      DATABASE_URL: postgresql://helpdesk_readonly:${READONLY_DB_PASSWORD:?set READONLY_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:-helpdesk_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      BACKEND_URL: http://backend:3000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?set INTERNAL_API_KEY in .env}
+      NODE_ENV: production
+      PORT: 3004
+      COMPANY_NAME: ${COMPANY_NAME:-Eviworx Software UG}
+      CSV_DELIMITER: ${CSV_DELIMITER:-;}
+    volumes:
+      - ./certs/proxy:/etc/eviworx/proxy-ca:ro
     depends_on:
       db:
         condition: service_healthy

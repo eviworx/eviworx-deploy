@@ -4,3 +4,6 @@
 # Your TLS certificate and key — never commit them
 certs/cert.pem
 certs/cert.key
+# Corporate proxy CA (your file) — only the README is tracked
+certs/proxy/*
+!certs/proxy/README.md

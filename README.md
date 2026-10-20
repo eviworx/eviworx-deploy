@@ -127,6 +127,40 @@ entryPoints:
 
 After editing, restart Traefik: `docker compose restart traefik`
 
+## Outbound Proxy
+
+Behind a corporate proxy, set it in `.env` — the backend and all workers then send every outbound
+HTTP(S) call through it: license server (activation, heartbeat), Entra ID, Microsoft Graph, Teams,
+Webex, Web Push, Cloudflare Turnstile, webhooks. Without these values everything goes direct.
+
+```env
+HTTPS_PROXY=http://proxy.company.example:3128
+HTTP_PROXY=http://proxy.company.example:3128
+# optional: targets that bypass the proxy (host names or .domain suffixes, NO CIDR ranges)
+NO_PROXY=erp.internal.company.com,.intranet.company.com
+```
+
+Then recreate: `docker compose up -d`.
+
+- **Internal traffic never uses the proxy.** The compose file carries the internal service names in
+  `NO_PROXY`; your `NO_PROXY` is appended. Internal webhook targets you allow in `SSRF_ALLOWLIST` must
+  also be listed in `NO_PROXY` by name — ranges are not evaluated.
+- **TLS inspection:** put the PEM of your corporate CA into `certs/proxy/` and set
+  `NODE_EXTRA_CA_CERTS=/etc/eviworx/proxy-ca/<file>.pem`. A missing file is ignored without a
+  warning — check it: `docker compose exec backend node -e "fetch('https://lic.eviworx.com').then(r => console.log(r.status))"`
+  (a TLS error means the CA is not loaded).
+- **Antivirus updates (ClamAV):** use `HTTPS_PROXY` unless you set `CLAMAV_HTTPS_PROXY` — empty means
+  direct, a value means its own proxy. freshclam does not read `NODE_EXTRA_CA_CERTS`; exempt the
+  ClamAV mirror (`database.clamav.net`) from TLS inspection.
+- **Email:** IMAP and SMTP connect directly, never through an HTTP proxy. For Microsoft 365 behind a
+  proxy use the Graph connection; otherwise open the mail ports in the firewall.
+- **Webhooks without external DNS:** webhook targets are checked before every call (private networks,
+  loopback, metadata are blocked). If the containers cannot resolve external names at all and only the
+  proxy can, set `SSRF_PROXY_RESOLVES_DNS=true`: names the container cannot resolve are then accepted
+  and resolved by the proxy — the proxy ACL is the boundary for them, so block private networks there
+  for this host.
+- `LICENSE_SERVER_URL` is not needed for a proxy; leave it at its default.
+
 ## 7. Product License
 
 Without a license Eviworx starts unlicensed (read-only). Activate your license key and secret — from your
